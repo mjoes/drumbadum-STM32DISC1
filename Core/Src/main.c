@@ -37,7 +37,7 @@
 /* USER CODE BEGIN PD */
 #define BUFFER_SIZE 	128
 #define F_SAMPLE		48000.0f
-#define F_OUT			440.0f
+#define F_OUT			300.0f
 #define PI 				3.14159f
 /* USER CODE END PD */
 
@@ -55,13 +55,14 @@ DMA_HandleTypeDef hdma_spi3_tx;
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
-//int16_t dacData[BUFFER_SIZE];
-int16_t placeholder[BUFFER_SIZE]; // REMOVE
-//static volatile int16_t *outBufPtr = &dacData[0];
-
+int16_t dacData[BUFFER_SIZE];
+static volatile int16_t *outBufPtr = &dacData[0];
 uint8_t dataReadyFlag;
-size_t sampleNumber = 0;
-static double pi = 3.14159265358979323846;
+
+// Sinewaves
+uint32_t sampleNumber = 0;
+float mySinVal, sample_dt;
+uint16_t sample_N;
 
 /* USER CODE END PV */
 
@@ -80,37 +81,29 @@ void MX_USB_HOST_Process(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-float mySinVal;
-float sample_dt;
-uint16_t sample_N;
-uint16_t i_t;
 
-uint32_t myDacVal;
-int16_t dacData[100];
-//int16_t dataI2S[100];
+void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
+	outBufPtr = &dacData[0];
+	dataReadyFlag = 1;
 
-//void HAL_I2SEx_TxRxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
-//	outBufPtr = &dacData[0];
-//	dataReadyFlag = 1;
-//}
-//
-//void HAL_I2SEx_TxRxCpltCallback(I2S_HandleTypeDef *hi2s) {
-//	outBufPtr = &dacData[BUFFER_SIZE / 2];
-//	dataReadyFlag = 1;
-//}
-//
-//void processData(){
-//	static int16_t leftOut, rightOut;
-//	for (uint8_t n = 0; n < (BUFFER_SIZE / 2) - 1; n += 2 ){
-//		leftOut = 32767 * sinf(2 * pi * 440.0 / 48000.0 * sampleNumber);
-//		rightOut = leftOut;
-//		outBufPtr[n] = leftOut;
-//		outBufPtr[n + 1] = rightOut;
-//		sampleNumber++;
-//	}
-//	dataReadyFlag = 0;
-//}
+}
 
+void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
+	outBufPtr = &dacData[BUFFER_SIZE / 2];
+	dataReadyFlag = 1;
+}
+
+
+void processData(){
+	for (uint8_t n = 0; n < (BUFFER_SIZE / 2) - 1; n += 2 ){
+		mySinVal = sinf(sampleNumber*2*PI*sample_dt);
+		outBufPtr[n] = (mySinVal )*8000;    //Right data (0 2 4 6 8 10 12)
+		outBufPtr[n + 1] =(mySinVal )*8000; //Left data  (1 3 5 7 9 11 13)
+		sampleNumber++;
+		if (sampleNumber>= sample_N) sampleNumber = 0;
+	}
+	dataReadyFlag = 0;
+}
 /* USER CODE END 0 */
 
 /**
@@ -121,7 +114,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  // analog
 	sample_dt = F_OUT/F_SAMPLE;
 	sample_N = F_SAMPLE/F_OUT;
   /* USER CODE END 1 */
@@ -151,28 +143,11 @@ int main(void)
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 2 */
 	CS43_Init(hi2c1, MODE_I2S);
-	CS43_SetVolume(40); //0 - 100,, 40
+	CS43_SetVolume(20); //0 - 100,, 40
 	CS43_Enable_RightLeft(CS43_RIGHT_LEFT);
 	CS43_Start();
 
-	//Build Sine wave
-	for(uint16_t i=0; i<sample_N; i++)
-	{
-		mySinVal = sinf(i*2*PI*sample_dt);
-		dacData[i*2] = (mySinVal )*8000;    //Right data (0 2 4 6 8 10 12)
-		dacData[i*2 + 1] =(mySinVal )*8000; //Left data  (1 3 5 7 9 11 13)
-	}
-
-	HAL_I2S_Transmit_DMA(&hi2s3, (uint16_t *)dacData, sample_N*2);
-
-  // ANALOG
-//  HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
-//  HAL_TIM_Base_Start_IT(&htim2);
-  // startDAC
-
-//	HAL_I2S_Transmit_DMA(&hi2s3, (uint16_t *) dacData, BUFFER_SIZE);
-//  HAL_I2S_Transmit_DMA(&hAudioOutI2s, pBuffer, DMA_MAX(Size/AUDIODATA_SIZE));
-//  HAL_StatusTypeDef status = HAL_I2SEx_TransmitReceive_DMA(&hi2s3, (uint16_t*) dacData, (uint16_t*) placeholder, BUFFER_SIZE);
+	HAL_I2S_Transmit_DMA(&hi2s3, (uint16_t *) dacData, BUFFER_SIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -180,12 +155,12 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-//    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-//    if (dataReadyFlag) {
-//    	processData();
-//    }
+    if (dataReadyFlag == 1) {
+    	processData();
+    }
+
   }
   /* USER CODE END 3 */
 }
@@ -454,22 +429,17 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-//{
-//  /* Prevent unused argument(s) compilation warning */
-//  UNUSED(htim);
-//
-//  /* NOTE : This function should not be modified, when the callback is needed,
-//            the HAL_TIM_PeriodElapsedCallback could be implemented in the user file
-//   */
-//  if(htim->Instance == TIM2) {
-//	  mySinVal = sinf(2 * pi * i_t * sample_dt);
-//	  myDacVal = (mySinVal + 1) * 127;
-//	  HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_8B_R, myDacVal);
-//	  i_t++;
-//	  if (i_t>= sample_N) i_t = 0;
-//  }
-//}
+int _write(int file, char *ptr, int len)
+{
+  (void)file;
+  int DataIdx;
+
+  for (DataIdx = 0; DataIdx < len; DataIdx++)
+  {
+    ITM_SendChar(*ptr++);
+  }
+  return len;
+}
 /* USER CODE END 4 */
 
 /**
