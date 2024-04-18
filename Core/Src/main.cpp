@@ -26,6 +26,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "MY_CS43L22.h"
+#include "bass_drum.h"
+#include "hihat.h"
+#include "fm_hit.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,9 +39,6 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define BUFFER_SIZE 	128
-#define F_SAMPLE		48000.0f
-#define F_OUT			300.0f
-#define PI 				3.14159f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -47,6 +47,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+
 I2C_HandleTypeDef hi2c1;
 
 I2S_HandleTypeDef hi2s3;
@@ -54,16 +57,56 @@ DMA_HandleTypeDef hdma_spi3_tx;
 
 SPI_HandleTypeDef hspi1;
 
+TIM_HandleTypeDef htim2;
+
 /* USER CODE BEGIN PV */
 int16_t dacData[BUFFER_SIZE];
 static volatile int16_t *outBufPtr = &dacData[0];
 uint8_t dataReadyFlag;
+const uint16_t sample_rate = 48000;
 
 // Sinewaves
 uint32_t sampleNumber = 0;
 float mySinVal, sample_dt;
 uint16_t sample_N;
 
+random_device rd{};
+mt19937 gen{rd()};
+
+BassDrum bass_drum(sample_rate, gen);
+HiHat hi_hat(sample_rate, gen);
+FmHit fm(sample_rate, gen);
+
+//uint16_t pot_0;
+uint8_t pot_seq_1 = pot_map(100,5);
+uint8_t pot_seq_2 = pot_map(500,50);
+uint8_t pot_seq_3 = pot_map(300,50);
+uint8_t pot_seq_rd = 50;//pot_map(100,100);
+uint8_t pot_seq_art = 50;//pot_map(100,100);
+uint8_t pot_seq_turing = pot_map(500,100);
+uint8_t pot_snd_1 = pot_map(300,50);
+uint8_t pot_snd_2 = 50 - pot_map(700,50);
+uint8_t pot_snd_bd = pot_map(100,100);
+uint8_t pot_snd_hh = pot_map(900,100);
+uint8_t pot_snd_fm = pot_map(500,100);
+uint8_t pot_turing_sounds = 0; //Just a placeholder so I don't forget
+uint8_t pot_bpm = 0; //Just a placeholder so I don't forget to create it
+const uint8_t bpm = 130;
+
+uint8_t step = 0;
+uint16_t step_sample = 0;
+uint8_t glitch = 0;
+bool accent = false;
+
+uint16_t pot_data[2];
+
+// Initialize sequencer
+int16_t hits[3] = { 0, 0, 0};
+int16_t seq_buffer[3][16] = {0};
+uint8_t steps = 16; // 8, 16 or 32
+uint32_t bar_sample = (60 * sample_rate * 4) / (bpm);
+uint16_t steps_sample = bar_sample / steps;
+// uint16_t glitch_sample = steps_sample / 4 + 1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -73,15 +116,15 @@ static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_TIM2_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
 	outBufPtr = &dacData[0];
 	dataReadyFlag = 1;
@@ -93,14 +136,55 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
 	dataReadyFlag = 1;
 }
 
-
 void processData(){
 	for (uint8_t n = 0; n < (BUFFER_SIZE / 2) - 1; n += 2 ){
-		mySinVal = sinf(sampleNumber*2*PI*sample_dt);
-		outBufPtr[n] = (mySinVal )*8000;    //Right data (0 2 4 6 8 10 12)
-		outBufPtr[n + 1] =(mySinVal )*8000; //Left data  (1 3 5 7 9 11 13)
-		sampleNumber++;
-		if (sampleNumber>= sample_N) sampleNumber = 0;
+        if (step_sample == steps_sample){
+            if (pot_seq_turing < 20 || pot_seq_turing > 80 ) {
+                for (int i = 0; i < 3; ++i) {
+                    hits[i] = seq_buffer[i][step]; // Access each element using array subscript notation
+                }
+            } else {
+                if (rhythms[pot_seq_1][step] == true){
+                    drum_hit(pot_seq_2,pot_seq_3,step, hits);
+                    accent = true;
+                }
+                else {
+                    chance_drum_hit(pot_seq_2, pot_seq_3, pot_seq_rd, step, hits);
+                    accent = false;
+                }
+                glitch = artifacts_hit(pot_seq_2, pot_seq_rd, pot_seq_art, step, hits);
+
+                for (int i = 0; i < 3; ++i) {
+                    seq_buffer[i][step] = hits[i];
+                }
+            }
+            step_sample = 0;
+            ++step;
+            if (step > 15) {
+                step = 0;
+            }
+        }
+        ++step_sample;
+
+		// Generate waveform sample
+		if (hits[0] == 1) {
+		 fm.set_start(pot_snd_1, pot_snd_2, pot_snd_fm, accent);
+		}
+		if (hits[1] == 1) {
+			bass_drum.set_start(pot_snd_1, pot_snd_2, pot_snd_bd, accent);
+		}
+		if (hits[2] == 1) {
+		 hi_hat.set_start(pot_snd_1, pot_snd_2, pot_snd_hh, accent);
+		}
+
+        int16_t out = (bass_drum.Process() + hi_hat.Process() + fm.Process())/10;
+
+        for (int i = 0; i < 3; ++i) {
+            hits[i] = 0; // Access each element using array subscript notation
+        }
+
+		outBufPtr[n] = out;
+		outBufPtr[n + 1] = out;
 	}
 	dataReadyFlag = 0;
 }
@@ -114,8 +198,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	sample_dt = F_OUT/F_SAMPLE;
-	sample_N = F_SAMPLE/F_OUT;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -141,29 +224,40 @@ int main(void)
   MX_I2S3_Init();
   MX_SPI1_Init();
   MX_USB_HOST_Init();
+  MX_ADC1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+
 	CS43_Init(hi2c1, MODE_I2S);
 	CS43_SetVolume(20); //0 - 100,, 40
 	CS43_Enable_RightLeft(CS43_RIGHT_LEFT);
 	CS43_Start();
 
+	// DMA stream for audio
 	HAL_I2S_Transmit_DMA(&hi2s3, (uint16_t *) dacData, BUFFER_SIZE);
-  /* USER CODE END 2 */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
+	// DMA stream for ADC
+	HAL_ADC_Start_DMA(&hadc1, (uint32_t *) pot_data, 2);
+	HAL_TIM_Base_Start(&htim2);
 
-    /* USER CODE BEGIN 3 */
-    if (dataReadyFlag == 1) {
-    	processData();
-    }
 
-  }
-  /* USER CODE END 3 */
-}
+	  /* USER CODE END 2 */
+
+	  /* Infinite loop */
+	  /* USER CODE BEGIN WHILE */
+	  while (1)
+	  {
+	    /* USER CODE END WHILE */
+		pot_seq_art = pot_data[0] * 100 / 4096;
+		pot_seq_rd = pot_data[0] * 100 / 4096;
+	    /* USER CODE BEGIN 3 */
+	    if (dataReadyFlag == 1) {
+	    	processData();
+	    }
+
+	  }
+	  /* USER CODE END 3 */
+	}
 
 /**
   * @brief System Clock Configuration
@@ -208,6 +302,67 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = ENABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 2;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_144CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Rank = 2;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
 }
 
 /**
@@ -317,6 +472,64 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 33600-1;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 500-1;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -324,11 +537,15 @@ static void MX_DMA_Init(void)
 
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
   /* DMA1_Stream5_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
 
 }
 
@@ -429,17 +646,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-int _write(int file, char *ptr, int len)
-{
-  (void)file;
-  int DataIdx;
 
-  for (DataIdx = 0; DataIdx < len; DataIdx++)
-  {
-    ITM_SendChar(*ptr++);
-  }
-  return len;
-}
 /* USER CODE END 4 */
 
 /**
