@@ -58,6 +58,7 @@ DMA_HandleTypeDef hdma_spi3_tx;
 SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
 int16_t dacData[BUFFER_SIZE];
@@ -77,7 +78,7 @@ BassDrum bass_drum(sample_rate, gen);
 HiHat hi_hat(sample_rate, gen);
 FmHit fm(sample_rate, gen);
 
-//uint16_t pot_0;
+// USER INTERFACE;
 uint8_t pot_seq_1 = pot_map(100,5);
 uint8_t pot_seq_2 = pot_map(500,50);
 uint8_t pot_seq_3 = pot_map(300,50);
@@ -91,12 +92,18 @@ uint8_t pot_snd_hh = pot_map(900,100);
 uint8_t pot_snd_fm = pot_map(500,100);
 uint8_t pot_turing_sounds = 0; //Just a placeholder so I don't forget
 uint8_t pot_bpm = 0; //Just a placeholder so I don't forget to create it
-const uint8_t bpm = 130;
+uint8_t pot_volume = 0; //Just a placeholder so I don't forget to create it
+// DON'T FORGET 2X LED AND CLOCK IN AND MIDI IN AND STEREO OUT
+bool start_button_state = true;
+bool mode_select_button_state = true; // just a placeholder so I don't forget to create it
 
+// Sequencer
+const uint8_t bpm = 130;
 uint8_t step = 0;
 uint16_t step_sample = 0;
 uint8_t glitch = 0;
 bool accent = false;
+bool run = false;
 
 uint16_t pot_data[2];
 
@@ -118,9 +125,11 @@ static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -136,7 +145,29 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
 	dataReadyFlag = 1;
 }
 
-void processData(){
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){ //interrupt handler
+	if(GPIO_Pin == B1_Pin && start_button_state == true){
+		HAL_TIM_Base_Start_IT(&htim3);
+		start_button_state = false;
+	}
+	else{
+		__NOP();
+	}
+
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if (htim->Instance == TIM3) {
+		run ^= true;
+		step = 0;
+		step_sample = 0;
+		start_button_state = true;
+		HAL_TIM_Base_Stop_IT(&htim3);
+	}
+}
+
+void processData(bool run){
 	for (uint8_t n = 0; n < (BUFFER_SIZE / 2) - 1; n += 2 ){
         if (step_sample == steps_sample){
             if (pot_seq_turing < 20 || pot_seq_turing > 80 ) {
@@ -177,7 +208,10 @@ void processData(){
 		 hi_hat.set_start(pot_snd_1, pot_snd_2, pot_snd_hh, accent);
 		}
 
-        int16_t out = (bass_drum.Process() + hi_hat.Process() + fm.Process())/10;
+		int16_t out = 0;
+		if (run){
+			out = (bass_drum.Process() + hi_hat.Process() + fm.Process())/10;
+		}
 
         for (int i = 0; i < 3; ++i) {
             hits[i] = 0; // Access each element using array subscript notation
@@ -188,6 +222,7 @@ void processData(){
 	}
 	dataReadyFlag = 0;
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -226,6 +261,7 @@ int main(void)
   MX_USB_HOST_Init();
   MX_ADC1_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
 	CS43_Init(hi2c1, MODE_I2S);
@@ -252,7 +288,7 @@ int main(void)
 		pot_seq_rd = pot_data[0] * 100 / 4096;
 	    /* USER CODE BEGIN 3 */
 	    if (dataReadyFlag == 1) {
-	    	processData();
+	    	processData(run);
 	    }
 
 	  }
@@ -530,6 +566,51 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 42000;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 50;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -602,7 +683,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
@@ -640,6 +721,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(MEMS_INT2_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
