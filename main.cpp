@@ -72,11 +72,8 @@ float mySinVal, sample_dt;
 uint16_t sample_N;
 
 random_device rd{};
-minstd_rand gen{rd()};
+mt19937 gen{rd()};
 
-Out bass_drum_out;
-Out hi_hat_out;
-Out fm_out;
 BassDrum bass_drum(sample_rate, gen);
 HiHat hi_hat(sample_rate, gen);
 FmHit fm(sample_rate, gen);
@@ -96,8 +93,6 @@ uint8_t pot_snd_fm = pot_map(500,100);
 uint8_t pot_turing_sounds = 0; //Just a placeholder so I don't forget
 uint8_t pot_bpm = 0; //Just a placeholder so I don't forget to create it
 uint8_t pot_volume = 0; //Just a placeholder so I don't forget to create it
-// DON'T FORGET 2X LED AND CLOCK IN AND MIDI IN AND STEREO OUT AND CLOCK OUT
-// USE USB FOR POWER
 bool start_button_state = true;
 bool mode_select_button_state = true; // just a placeholder so I don't forget to create it
 
@@ -212,26 +207,21 @@ void processData(bool run){
 		 hi_hat.set_start(pot_snd_1, pot_snd_2, pot_snd_hh, accent);
 		}
 
-
-		int16_t out_l = 0;
-		int16_t out_r = 0;
+		int16_t out = 0;
 		if (run){
-	        bass_drum_out = bass_drum.Process();
-	        hi_hat_out = hi_hat.Process();
-	        fm_out = fm.Process();
-	        out_l = (bass_drum_out.out_l + hi_hat_out.out_l + fm_out.out_l)/3;
-	        out_r = (bass_drum_out.out_r + hi_hat_out.out_r + fm_out.out_r)/3;
+			out = (bass_drum.Process() + hi_hat.Process() + fm.Process())/10;
 		}
 
         for (int i = 0; i < 3; ++i) {
             hits[i] = 0; // Access each element using array subscript notation
         }
 
-		outBufPtr[n] = out_l;
-		outBufPtr[n + 1] = out_r;
+		outBufPtr[n] = out;
+		outBufPtr[n + 1] = out;
 	}
 	dataReadyFlag = 0;
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -691,17 +681,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(PDM_OUT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
+  /*Configure GPIO pins : B1_Pin B1_alt_Pin */
+  GPIO_InitStruct.Pin = B1_Pin|B1_alt_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : B1_alt_Pin */
-  GPIO_InitStruct.Pin = B1_alt_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_alt_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : BOOT1_Pin */
   GPIO_InitStruct.Pin = BOOT1_Pin;
