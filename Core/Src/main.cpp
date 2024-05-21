@@ -72,8 +72,11 @@ float mySinVal, sample_dt;
 uint16_t sample_N;
 
 random_device rd{};
-mt19937 gen{rd()};
+minstd_rand gen{rd()};
 
+Out bass_drum_out;
+Out hi_hat_out;
+Out fm_out;
 BassDrum bass_drum(sample_rate, gen);
 HiHat hi_hat(sample_rate, gen);
 FmHit fm(sample_rate, gen);
@@ -208,17 +211,22 @@ void processData(bool run){
 		 hi_hat.set_start(pot_snd_1, pot_snd_2, pot_snd_hh, accent);
 		}
 
-		int16_t out = 0;
+		int16_t out_l = 0;
+		int16_t out_r = 0;
 		if (run){
-			out = (bass_drum.Process() + hi_hat.Process() + fm.Process())/10;
+	        bass_drum_out = bass_drum.Process();
+	        hi_hat_out = hi_hat.Process();
+	        fm_out = fm.Process();
+	        out_l = (bass_drum_out.out_l + hi_hat_out.out_l + fm_out.out_l)/10;
+	        out_r = (bass_drum_out.out_r + hi_hat_out.out_r + fm_out.out_r)/10;
 		}
 
         for (int i = 0; i < 3; ++i) {
             hits[i] = 0; // Access each element using array subscript notation
         }
 
-		outBufPtr[n] = out;
-		outBufPtr[n + 1] = out;
+		outBufPtr[n] = out_l;
+		outBufPtr[n + 1] = out_r;
 	}
 	dataReadyFlag = 0;
 }
